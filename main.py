@@ -5,6 +5,7 @@ import time
 import os
 import json
 from datetime import datetime
+from ui.utils import *
 
 # Initialize Pygame
 pygame.init()
@@ -72,7 +73,7 @@ class ScoreManager:
         return self.scores
 
 class Zombie:
-    def __init__(self, lane, spawn_x=None):
+    def __init__(self, lane, spawn_x=None, frames=[]):
         self.lane = lane
         if spawn_x is None:
             self.x = random.randint(-80, SCREEN_WIDTH // 2 - 200)  # Don't spawn past halfway
@@ -86,12 +87,28 @@ class Zombie:
         self.health = 1
         self.animation_frame = 0
         self.hit_effect_time = 0
+
+        self.frames, self.frame_index, self.animation_speed = frames, 0, 0
+        self.image = self.frames[self.frame_index] 
+        self.rect = self.image.get_frect(center=(self.x,self.y))
     
+    def animate(self, dt):
+        self.frame_index += self.animation_speed * dt
+        self.image = self.frames[int(self.frame_index) % len(self.frames)]
+
+    def move(self, game_duration):
+        self.speed_multiplier = 1 + (game_duration / 60000)  
+        self.rect.x += self.speed * self.speed_multiplier / FPS
+        self.animation_frame += 0.1
+
     def update(self, game_duration):
         if not self.hit:
-            speed_multiplier = 1 + (game_duration / 60000)  # Speed increases over time
-            self.x += self.speed * speed_multiplier / FPS
-            self.animation_frame += 0.1
+            # move
+            self.move(game_duration)
+
+            # animate 
+            self.animation_speed = self.speed_multiplier / 5
+            self.animate(self.speed_multiplier)
         
         # Update hit effect
         if self.hit_effect_time > 0:
@@ -104,22 +121,7 @@ class Zombie:
         head_bob = math.sin(self.animation_frame) * 3 if not self.hit else 0
         head_y = self.y + head_bob
         
-        # Zombie body (simple rectangle)
-        body_rect = pygame.Rect(self.x - 20, self.y + 10, 40, 50)
-        pygame.draw.rect(screen, DARK_GREEN, body_rect)
-        
-        # Zombie head
-        head_color = GREEN if not self.hit else RED
-        pygame.draw.circle(screen, head_color, (int(self.x), int(head_y)), self.size // 2)
-        
-        # Zombie features
-        # Eyes
-        eye_size = 6
-        pygame.draw.circle(screen, RED, (int(self.x - 12), int(head_y - 8)), eye_size)
-        pygame.draw.circle(screen, RED, (int(self.x + 12), int(head_y - 8)), eye_size)
-        
-        # Mouth
-        pygame.draw.arc(screen, BLACK, (self.x - 10, head_y - 5, 20, 15), 0, math.pi, 2)
+        screen.blit(self.image, self.rect)
         
         # Hit effect
         if self.hit_effect_time > 0:
@@ -127,7 +129,7 @@ class Zombie:
             pygame.draw.circle(screen, YELLOW, (int(self.x), int(head_y)), effect_radius, 3)
     
     def get_hit_rect(self):
-        return pygame.Rect(self.x - self.size // 2, self.y - self.size // 2, self.size, self.size)
+        return self.rect
     
     def is_clickable(self):
         return not self.hit and self.x > 0
@@ -260,6 +262,8 @@ class Game:
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Zombie Whack Game")
         self.clock = pygame.time.Clock()
+
+        self.load_assets()
         
         # Fonts
         self.font_large = pygame.font.Font(None, 72)
@@ -283,6 +287,9 @@ class Game:
             self.hit_sound = self.create_hit_sound()
         except:
             self.hit_sound = None
+
+    def load_assets(self):
+        self.zombie_frames = [pygame.transform.flip(frame, True, False) for frame in import_folder('assets', 'images', 'Zombie')]
     
     def create_hit_sound(self):
         duration = 0.1
@@ -333,7 +340,7 @@ class Game:
                current_time - self.last_spawn_per_grave[grave_key] >= self.spawn_delay:
                 
                 # Spawn zombie at the grave position for this lane
-                zombie = Zombie(lane, self.grave_positions[lane])
+                zombie = Zombie(lane, self.grave_positions[lane], self.zombie_frames)
                 self.zombies.append(zombie)
                 self.last_zombie_spawn = current_time
                 self.last_spawn_per_grave[grave_key] = current_time
@@ -378,7 +385,7 @@ class Game:
         for zombie in self.zombies[:]:
             zombie.update(game_duration)
             
-            if zombie.x > SCREEN_WIDTH - 100 and not zombie.hit:
+            if zombie.rect.left > SCREEN_WIDTH - 100 and not zombie.hit:
                 self.health -= 1
                 self.zombies.remove(zombie)
                 self.combo = 0
