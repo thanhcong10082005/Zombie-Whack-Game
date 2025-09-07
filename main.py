@@ -6,6 +6,8 @@ import os
 import json
 from datetime import datetime
 from ui.utils import *
+from assets import *
+from menu import *
 
 # Initialize Pygame
 pygame.init()
@@ -75,22 +77,25 @@ class ScoreManager:
 class Zombie:
     def __init__(self, lane, spawn_x=None, frames=[]):
         self.lane = lane
-        if spawn_x is None:
-            self.x = random.randint(-80, SCREEN_WIDTH // 2 - 200)  # Don't spawn past halfway
-        else:
-            self.x = spawn_x
-        self.y = 150 + lane * LANE_HEIGHT + 25  # Center in lane
         self.spawn_time = pygame.time.get_ticks()
         self.speed = ZOMBIE_SPEED_BASE
         self.hit = False
+        self.target = False
         self.size = 60
         self.health = 1
         self.animation_frame = 0
         self.hit_effect_time = 0
 
+        # ui
         self.frames, self.frame_index, self.animation_speed = frames, 0, 0
         self.image = self.frames[self.frame_index] 
-        self.rect = self.image.get_frect(center=(self.x,self.y))
+        self.rect = self.image.get_frect()
+
+        if spawn_x is None:
+            self.rect.centerx = random.randint(-80, SCREEN_WIDTH // 2 - 200)
+        else:
+            self.rect.centerx = spawn_x
+        self.rect.centery = 150 + lane * LANE_HEIGHT + 25
     
     def animate(self, dt):
         self.frame_index += self.animation_speed * dt
@@ -117,22 +122,20 @@ class Zombie:
     def draw(self, screen):
         if self.hit and self.hit_effect_time <= 0:
             return
-            
-        head_bob = math.sin(self.animation_frame) * 3 if not self.hit else 0
-        head_y = self.y + head_bob
         
-        screen.blit(self.image, self.rect)
+        if not self.hit:
+            screen.blit(self.image, self.rect)
         
         # Hit effect
         if self.hit_effect_time > 0:
-            effect_radius = self.size // 2 + (10 - self.hit_effect_time) * 2
-            pygame.draw.circle(screen, YELLOW, (int(self.x), int(head_y)), effect_radius, 3)
+            effect_radius = self.rect.width // 2 + (10 - self.hit_effect_time) * 2
+            pygame.draw.circle(screen, YELLOW, self.rect.center, effect_radius, 3)
     
     def get_hit_rect(self):
         return self.rect
     
     def is_clickable(self):
-        return not self.hit and self.x > 0
+        return not self.hit and not self.target and self.rect.right > 0
     
     def take_hit(self):
         self.hit = True
@@ -264,6 +267,10 @@ class Game:
         self.clock = pygame.time.Clock()
 
         self.load_assets()
+
+        # Score bar
+        self.score_bar = ScoreBar(self.sunflower_frames, self.sun_frames)
+
         
         # Fonts
         self.font_large = pygame.font.Font(None, 72)
@@ -277,20 +284,40 @@ class Game:
         # Game state
         self.state = "menu"  # menu, playing, game_over
         self.reset_game()
+        self.effects = []
         
         self.grave_positions = {}  # Track grave positions for each lane
         self.last_spawn_per_grave = {}  # Track last spawn time for each grave
         self.spawn_delay = 300  # 0.3 seconds delay between spawns from same grave
         
         # Load sounds
+        self.audio['grasswalk'].play(loops = -1)
         try:
             self.hit_sound = self.create_hit_sound()
         except:
             self.hit_sound = None
 
     def load_assets(self):
+        # graphics
         self.zombie_frames = [pygame.transform.flip(frame, True, False) for frame in import_folder('assets', 'images', 'Zombie')]
-    
+        self.cherry_frames = import_folder('assets', 'images', 'CherryBomb')
+        self.explosion_frames = [pygame.transform.flip(frame, True, False) for frame in import_folder('assets', 'images', 'BoomDie')]
+        self.boom_surf = import_image('assets', 'images', 'screen', 'Boom')
+        self.sunflower_frames = import_folder('assets', 'images', 'menu', 'SunFlower')
+        self.sun_frames = import_folder('assets', 'images', 'menu', 'Sun')
+
+        # crop road of background
+        background_surf = import_image('assets', 'images', 'screen', 'Background', format='jpg')
+
+        width = background_surf.get_width()
+        height = background_surf.get_height()
+        crop_width = int(width * 0.76)
+
+        self.background_surf = pygame.transform.scale(background_surf.subsurface((0, 0, crop_width, height)), (SCREEN_WIDTH, SCREEN_HEIGHT))
+
+        # sounds
+        self.audio = audio_importer('assets', 'audio')
+
     def create_hit_sound(self):
         duration = 0.1
         sample_rate = 22050
@@ -314,6 +341,7 @@ class Game:
         self.last_zombie_spawn = 0
         self.zombie_spawn_interval = 2000  # 2 seconds initially
         self.zombies = []
+        self.effects = []
         self.hit_effects = []
         self.grave_positions = {}
         self.last_spawn_per_grave = {}
@@ -349,27 +377,10 @@ class Game:
         hit_zombie = False
         for zombie in self.zombies[:]:
             if zombie.is_clickable() and zombie.get_hit_rect().collidepoint(pos):
-                score = zombie.take_hit()
-                
-                # Combo bonus
-                combo_bonus = int(score * (self.combo * 0.1))
-                final_score = score + combo_bonus
-                
-                self.score += final_score
-                self.hits += 1
-                self.combo += 1
-                self.max_combo = max(self.max_combo, self.combo)
-                
-                # Hit effect
-                self.hit_effects.append({
-                    'x': zombie.x,
-                    'y': zombie.y,
-                    'time': pygame.time.get_ticks(),
-                    'score': final_score
-                })
-                
-                if self.hit_sound:
-                    self.hit_sound.play()
+                zombie.target = True
+
+                bomb = CherryBomb(zombie, self.cherry_frames, func=self.create_boom)
+                self.effects.append(bomb)
                 
                 hit_zombie = True
                 break
@@ -377,6 +388,50 @@ class Game:
         if not hit_zombie:
             self.misses += 1
             self.combo = 0
+
+    def create_boom(self, zombie):
+        boom = Boom(self.boom_surf, self.create_explosion, zombie)
+        self.effects.append(boom)
+
+    def create_explosion(self, zombie):
+        if not zombie.hit: 
+            score = zombie.take_hit()
+        
+            explosion = BoomDie(zombie.rect.center, self.explosion_frames)
+            self.effects.append(explosion)
+            
+            combo_bonus = int(score * (self.combo * 0.1))
+            final_score = score + combo_bonus
+            
+            self.score += final_score
+            self.hits += 1
+            self.combo += 1
+            self.max_combo = max(self.max_combo, self.combo)
+            
+            # Hit effect (điểm bay lên)
+            self.hit_effects.append({
+                'x': zombie.rect.centerx,
+                'y': zombie.rect.centery,
+                'time': pygame.time.get_ticks(),
+                'score': final_score
+            })
+        
+            self.audio['cherrybomb'].play()
+
+    def update_effects(self):
+        """Cập nhật tất cả các hiệu ứng đang hoạt động."""
+        dt = self.clock.get_time() / 1000.0 # Delta time in seconds
+        
+        # Duyệt qua bản sao của danh sách để có thể xóa phần tử
+        for effect in self.effects[:]:
+            effect.update(dt)
+            if effect.finished:
+                self.effects.remove(effect)
+
+    def draw_effects(self):
+        """Vẽ tất cả các hiệu ứng."""
+        for effect in self.effects:
+            effect.draw(self.screen)
     
     def update_zombies(self):
         current_time = pygame.time.get_ticks()
@@ -412,28 +467,7 @@ class Game:
         return final_score
     
     def draw_game_background(self):
-        self.screen.fill(DARK_GREEN)
-        
-        # Draw lanes
-        for i in range(LANES):
-            lane_y = 150 + i * LANE_HEIGHT
-            lane_rect = pygame.Rect(0, lane_y, SCREEN_WIDTH - 150, LANE_HEIGHT - 10)
-            
-            # Alternate lane colors
-            lane_color = LIGHT_GREEN if i % 2 == 0 else DARK_GREEN
-            pygame.draw.rect(self.screen, lane_color, lane_rect)
-            pygame.draw.rect(self.screen, BROWN, lane_rect, 2)
-        
-        # Draw house
-        house_rect = pygame.Rect(SCREEN_WIDTH - 150, 100, 140, 600)
-        pygame.draw.rect(self.screen, BROWN, house_rect)
-        
-        # House details
-        for i in range(LANES):
-            window_y = 150 + i * LANE_HEIGHT + 30
-            window_rect = pygame.Rect(SCREEN_WIDTH - 120, window_y, 40, 40)
-            pygame.draw.rect(self.screen, YELLOW, window_rect)
-            pygame.draw.rect(self.screen, BLACK, window_rect, 2)
+        self.screen.blit(self.background_surf, (0, 0))
     
     def draw_game_ui(self):
         # UI Background
@@ -488,6 +522,7 @@ class Game:
                 self.screen.blit(score_surface, (effect['x'] - 20, effect['y'] - y_offset))
     
     def draw_game_over(self):
+
         # Semi-transparent overlay
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         overlay.set_alpha(180)
@@ -545,8 +580,9 @@ class Game:
 
     def run(self):
         running = True
-        
         while running:
+            dt = self.clock.tick(FPS) / 1000
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -559,6 +595,7 @@ class Game:
                                 for button in buttons:
                                     if button["rect"].collidepoint(event.pos):
                                         if button["action"] == "play":
+                                            self.audio['awooga'].play()
                                             self.state = "playing"
                                             self.reset_game()
                                         elif button["action"] == "scores":
@@ -595,6 +632,8 @@ class Game:
             # Update game logic
             if self.state == "playing":
                 if self.health <= 0:
+                    self.audio['scream'].play()
+                    self.audio['losemusic'].play()
                     if not self.game_end_time:
                         self.game_end_time = pygame.time.get_ticks()
                     self.state = "game_over"
@@ -602,6 +641,8 @@ class Game:
                     self.spawn_zombie()
                     self.update_zombies()
                     self.update_hit_effects()
+                    self.update_effects()
+                    self.score_bar.update(dt, self.health)
             
             # Draw everything
             if self.state == "menu":
@@ -618,7 +659,12 @@ class Game:
                     zombie.draw(self.screen)
                 
                 self.draw_hit_effects()
-                self.draw_game_ui()
+                self.draw_effects()
+                current_time = pygame.time.get_ticks()
+                game_duration = (current_time - self.game_start_time) / 1000
+                
+                # Gọi draw của score_bar với đủ các tham số
+                self.score_bar.draw(self.screen, self.score, self.health, self.hits, self.misses, self.combo, game_duration)
             
             elif self.state == "game_over":
                 self.draw_game_background()
@@ -627,6 +673,9 @@ class Game:
                 for zombie in self.zombies:
                     zombie.draw(self.screen)
                 
+                # sounds
+                self.audio['scream'].play()
+                self.audio['losemusic'].play()
                 self.draw_game_over()
             
             pygame.display.flip()
