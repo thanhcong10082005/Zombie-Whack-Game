@@ -2,16 +2,22 @@ import pygame
 import random
 import math
 import time
+import audio
 import os
 import json
 from datetime import datetime
+
 from ui.utils import *
 from assets import *
 from menu import *
+from popup_effects import CartoonPopupText
 
 # Initialize Pygame
 pygame.init()
 pygame.mixer.init()
+# pygame.mixer.set_num_channels(32)
+
+sfx = audio.sfx()
 
 # Constants
 SCREEN_WIDTH = 1200
@@ -40,6 +46,7 @@ ZOMBIE_SPEED_BASE = 50  # pixels per second
 DIFFICULTY_INCREASE_INTERVAL = 30000  # 30 seconds
 LANES = 6
 LANE_HEIGHT = 100
+GROAN_TIME = 2500
 
 class ScoreManager:
     def __init__(self):
@@ -73,6 +80,7 @@ class ScoreManager:
     
     def get_top_scores(self):
         return self.scores
+
 
 class Zombie:
     def __init__(self, lane, spawn_x=None, frames=[]):
@@ -140,7 +148,30 @@ class Zombie:
     def take_hit(self):
         self.hit = True
         self.hit_effect_time = 10
-        return 100  # Base score
+        
+        # Calculate time alive to determine score category
+        current_time = pygame.time.get_ticks()
+        time_alive = (current_time - self.spawn_time) / 1000.0  # Convert to seconds
+        
+        # Determine score and category based on timing
+        if time_alive <= 0.5:
+            score = 100
+            category = "PERFECT"
+            color = GOLD
+        elif time_alive <= 1.5:
+            score = 75
+            category = "GREAT"
+            color = GREEN
+        elif time_alive <= 3.0:
+            score = 60
+            category = "GOOD"
+            color = BLUE
+        else:
+            score = 50
+            category = "NOT BAD"
+            color = WHITE
+            
+        return score, category, color
 
 class Menu:
     def __init__(self, screen, font_large, font_medium, font_small):
@@ -159,7 +190,7 @@ class Menu:
             pygame.draw.line(self.screen, (r, g, b), (0, y), (SCREEN_WIDTH, y))
         
         # Game title with shadow effect
-        title_text = "ZOMBIE WHACK GAME"
+        title_text = "WHACK A ZOMBIE"
         shadow = self.font_large.render(title_text, True, BLACK)
         title = self.font_large.render(title_text, True, GOLD)
         
@@ -262,8 +293,10 @@ class Menu:
 
 class Game:
     def __init__(self):
+        sfx.play_background()
+
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption("Zombie Whack Game")
+        pygame.display.set_caption("Whack A Zombie")
         self.clock = pygame.time.Clock()
 
         self.load_assets()
@@ -327,6 +360,7 @@ class Game:
             wave = 4096 * math.sin(2 * math.pi * 440 * i / sample_rate)
             arr.append([int(wave), int(wave)])
         sound = pygame.sndarray.make_sound(pygame.array.array('i', arr))
+        
         return sound
     
     def reset_game(self):
@@ -343,8 +377,10 @@ class Game:
         self.zombies = []
         self.effects = []
         self.hit_effects = []
+        self.cartoon_popups = []
         self.grave_positions = {}
         self.last_spawn_per_grave = {}
+        self.spawn_delay = 300  # 0.3 seconds delay between spawns from same grave
         for lane in range(LANES):
             # Random grave position in first half of screen for each lane
             self.grave_positions[lane] = random.randint(-80, SCREEN_WIDTH // 2 - 200)
@@ -353,22 +389,30 @@ class Game:
         current_time = pygame.time.get_ticks()
         game_duration = current_time - self.game_start_time
         
-        if game_duration < 30000:  # 0-30s
+        if game_duration < DIFFICULTY_INCREASE_INTERVAL:  # 0-30s
             spawn_interval = 2000
-        elif game_duration < 60000:  # 30-60s
+        elif game_duration < 2*DIFFICULTY_INCREASE_INTERVAL:  # 30-60s
             spawn_interval = 1000
-        else:  # 60s+
+        if game_duration < 3*DIFFICULTY_INCREASE_INTERVAL:  # 60-90s
             spawn_interval = 500
+        elif game_duration < 4*DIFFICULTY_INCREASE_INTERVAL:  # 90-120s
+            spawn_interval = 450
+        else:  # 120s+
+            spawn_interval = 400
         
         if current_time - self.last_zombie_spawn >= spawn_interval:
             lane = random.randint(0, LANES - 1)
             grave_key = f"grave_{lane}"
             
             if grave_key not in self.last_spawn_per_grave or \
-               current_time - self.last_spawn_per_grave[grave_key] >= self.spawn_delay:
+                current_time - self.last_spawn_per_grave[grave_key] >= self.spawn_delay:
                 
                 # Spawn zombie at the grave position for this lane
+
                 zombie = Zombie(lane, self.grave_positions[lane], self.zombie_frames)
+                # play sounds
+                sfx.play_zombie_appear()
+                
                 self.zombies.append(zombie)
                 self.last_zombie_spawn = current_time
                 self.last_spawn_per_grave[grave_key] = current_time
@@ -377,10 +421,44 @@ class Game:
         hit_zombie = False
         for zombie in self.zombies[:]:
             if zombie.is_clickable() and zombie.get_hit_rect().collidepoint(pos):
+
                 zombie.target = True
 
                 bomb = CherryBomb(zombie, self.cherry_frames, func=self.create_boom)
                 self.effects.append(bomb)
+
+                score, category, category_color = zombie.take_hit()
+                
+                # Combo bonus
+                combo_bonus = int(score * (self.combo * 0.1))
+                final_score = score + combo_bonus
+                
+                self.score += final_score
+                self.hits += 1
+                self.combo += 1
+                self.max_combo = max(self.max_combo, self.combo)
+                
+                # Create cartoon popup for category
+                popup = CartoonPopupText(
+                    zombie.x, 
+                    zombie.y - 60,  # Position above zombie
+                    category, 
+                    category_color
+                )
+                self.cartoon_popups.append(popup)
+                
+                # Keep old hit effect for score display
+                self.hit_effects.append({
+                    'x': zombie.x,
+                    'y': zombie.y,
+                    'time': pygame.time.get_ticks(),
+                    'score': final_score
+                })
+                
+                # if self.hit_sound:
+                #     self.hit_sound.play()
+                sfx.play_bonk_sound()
+
                 
                 hit_zombie = True
                 break
@@ -440,17 +518,26 @@ class Game:
         for zombie in self.zombies[:]:
             zombie.update(game_duration)
             
-            if zombie.rect.left > SCREEN_WIDTH - 100 and not zombie.hit:
+
+            if zombie.x > SCREEN_WIDTH - 100 and not zombie.hit:
+                sfx.play_eat_sound()
+
                 self.health -= 1
                 self.zombies.remove(zombie)
                 self.combo = 0
+                if (self.health==0):
+                    sfx.play_lose_sound()
             elif zombie.hit and zombie.hit_effect_time <= 0:
                 self.zombies.remove(zombie)
     
     def update_hit_effects(self):
         current_time = pygame.time.get_ticks()
         self.hit_effects = [effect for effect in self.hit_effects 
-                           if current_time - effect['time'] < 1000]
+                            if current_time - effect['time'] < 1000]
+    
+    def update_cartoon_popups(self):
+        # Update all cartoon popups and remove expired ones
+        self.cartoon_popups = [popup for popup in self.cartoon_popups if popup.update()]
     
     def calculate_final_score(self):
         total_shots = self.hits + self.misses
@@ -517,11 +604,21 @@ class Game:
             
             if alpha > 0:
                 y_offset = time_diff * 0.1
+                
+                # Draw only score text (category is now handled by speech bubbles)
                 score_text = f"+{effect['score']}"
-                score_surface = self.font_medium.render(score_text, True, GOLD)
-                self.screen.blit(score_surface, (effect['x'] - 20, effect['y'] - y_offset))
+                score_surface = self.font_small.render(score_text, True, GOLD)
+                score_rect = score_surface.get_rect(center=(int(effect['x']), int(effect['y'] - y_offset + 20)))
+                self.screen.blit(score_surface, score_rect)
+    
+    def draw_cartoon_popups(self):
+        for popup in self.cartoon_popups:
+            popup.draw(self.screen, self.font_medium, self.font_small)
     
     def draw_game_over(self):
+
+        sfx.stop_looboon()
+        sfx.stop_brain_maniac()
 
         # Semi-transparent overlay
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -579,11 +676,16 @@ class Game:
             self.score_saved = True
 
     def run(self):
+        change_music = False
         running = True
+
+        groan_count = 0
+
         while running:
             dt = self.clock.tick(FPS) / 1000
 
             for event in pygame.event.get():
+                # print(self.state)
                 if event.type == pygame.QUIT:
                     running = False
                 
@@ -595,7 +697,14 @@ class Game:
                                 for button in buttons:
                                     if button["rect"].collidepoint(event.pos):
                                         if button["action"] == "play":
+
                                             self.audio['awooga'].play()
+
+                                            sfx.stop_looboon()
+                                            sfx.stop_brain_maniac()
+                                            sfx.stop_background()
+                                            sfx.play_looboon()
+
                                             self.state = "playing"
                                             self.reset_game()
                                         elif button["action"] == "scores":
@@ -616,16 +725,27 @@ class Game:
                         if self.state == "menu":
                             running = False
                         else:
+                            sfx.stop_looboon()
+                            sfx.stop_brain_maniac()
+                            sfx.play_background()
+
                             self.state = "menu"
                             self.menu.state = "main"
                     
                     elif event.key == pygame.K_r:
                         if self.state == "game_over":
+                            sfx.stop_looboon()
+                            sfx.stop_brain_maniac()
+                            sfx.play_looboon()
                             self.state = "playing"
                             self.reset_game()
                     
                     elif event.key == pygame.K_m:
                         if self.state == "game_over":
+                            sfx.stop_looboon()
+                            sfx.stop_brain_maniac()
+                            sfx.play_background()
+                            
                             self.state = "menu"
                             self.menu.state = "main"
             
@@ -641,8 +761,23 @@ class Game:
                     self.spawn_zombie()
                     self.update_zombies()
                     self.update_hit_effects()
+
                     self.update_effects()
                     self.score_bar.update(dt, self.health)
+
+                    self.update_cartoon_popups()
+
+                    # change music and zombie groaning
+                    current_time = pygame.time.get_ticks()
+                    game_duration = current_time - self.game_start_time
+                    if not change_music:
+                        if (game_duration >= 90000):
+                            sfx.play_brain_maniac()
+                            sfx.stop_looboon()
+                            change_music = True
+                    if game_duration/GROAN_TIME>groan_count:
+                        sfx.play_zombie_groan()
+                        groan_count+=1
             
             # Draw everything
             if self.state == "menu":
@@ -659,12 +794,15 @@ class Game:
                     zombie.draw(self.screen)
                 
                 self.draw_hit_effects()
+
                 self.draw_effects()
                 current_time = pygame.time.get_ticks()
                 game_duration = (current_time - self.game_start_time) / 1000
                 
                 # Gọi draw của score_bar với đủ các tham số
                 self.score_bar.draw(self.screen, self.score, self.health, self.hits, self.misses, self.combo, game_duration)
+                self.draw_cartoon_popups()
+                self.draw_game_ui()
             
             elif self.state == "game_over":
                 self.draw_game_background()
@@ -677,7 +815,7 @@ class Game:
                 self.audio['scream'].play()
                 self.audio['losemusic'].play()
                 self.draw_game_over()
-            
+
             pygame.display.flip()
             self.clock.tick(FPS)
         
