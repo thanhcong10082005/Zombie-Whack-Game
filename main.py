@@ -391,7 +391,7 @@ class Game:
         game_duration = current_time - self.game_start_time
         
         if game_duration < DIFFICULTY_INCREASE_INTERVAL:  # 0-30s
-            spawn_interval = 4000  # tăng gấp đôi thời gian xuất hiện
+            spawn_interval = 3000  
         elif game_duration < 2*DIFFICULTY_INCREASE_INTERVAL:  # 30-60s
             spawn_interval = 2000
         elif game_duration < 3*DIFFICULTY_INCREASE_INTERVAL:  # 60-90s
