@@ -36,7 +36,7 @@ class CartoonPopupText:
         self.text = text
         self.category_color = category_color
         self.spawn_time = pygame.time.get_ticks()
-        self.lifetime = 2500  # 2.5 seconds
+        self.lifetime = 1200  # 1.5 seconds
         self.scale = 0.0
         self.target_scale = 1.2
         self.bounce_phase = 0.0
@@ -56,17 +56,17 @@ class CartoonPopupText:
         elapsed = current_time - self.spawn_time
         
         # Animation phases
-        if elapsed < 300:  # First 0.3 seconds - explosive entrance
-            progress = elapsed / 300.0
+        if elapsed < 200:  # First 0.2 seconds - explosive entrance
+            progress = elapsed / 200.0
             self.scale = self.ease_out_back(progress) * self.target_scale
             self.rotation = math.sin(progress * math.pi * 4) * 10  # Wobble effect
-        elif elapsed < self.lifetime - 500:  # Middle phase - stable with gentle bob
+        elif elapsed < self.lifetime - 300:  # Middle phase - stable with gentle bob
             self.scale = self.target_scale
             self.bounce_phase += 0.15
             self.y = self.original_y - 20 + math.sin(self.bounce_phase) * 3
             self.rotation = math.sin(self.bounce_phase * 0.5) * 2
-        else:  # Last 0.5 seconds - pop-out shrink
-            fade_progress = (elapsed - (self.lifetime - 500)) / 500.0
+        else:  # Last 0.3 seconds - pop-out shrink
+            fade_progress = (elapsed - (self.lifetime - 300)) / 300.0
             self.scale = self.target_scale * (1.0 - fade_progress)  # Shrink to 0
             self.y -= 1.0  # Gentle float upward
             self.rotation = 0  # No rotation during exit
