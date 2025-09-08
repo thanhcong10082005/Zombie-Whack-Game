@@ -1,4 +1,6 @@
-from ui.settings import *
+from settings import *
+from os import walk
+from os.path import join
 
 def import_image(*path, format = 'png', alpha = True):
     full_path = join(*path) + f'.{format}'
