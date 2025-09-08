@@ -1,4 +1,4 @@
-from ui.settings import *
+from settings import *
 from ui.utils import *
 
 class Animated:
