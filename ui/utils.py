@@ -10,7 +10,12 @@ def import_image(*path, format = 'png', alpha = True):
 def import_folder(*path):
     frames = []
     for folder_path, _, file_names in walk(join(*path)):
-        for file_name in sorted(file_names, key = lambda name: int(name.split('_')[1].split('.')[0])):
+        def extract_number(name):
+            try:
+                return int(name.split('_')[1].split('.')[0])
+            except Exception:
+                return float('inf')  # Đưa file không hợp lệ xuống cuối
+        for file_name in sorted(file_names, key=extract_number):
             full_path = join(folder_path, file_name)
             surf = pygame.image.load(full_path).convert_alpha()
             frames.append(surf)

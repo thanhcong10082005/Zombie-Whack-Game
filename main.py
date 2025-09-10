@@ -115,52 +115,83 @@ class Game:
         self.game_start_time = pygame.time.get_ticks()
         self.game_end_time = None
         self.last_zombie_spawn = 0
-        self.zombie_spawn_interval = 2000  # 2 seconds initially
+        self.zombie_spawn_interval = 2000
         self.zombies = []
         self.effects = []
         self.hit_effects = []
         self.cartoon_popups = []
-        self.grave_positions = {}
-        self.last_spawn_per_grave = {}
-        self.spawn_delay = 150  # 0.3 seconds delay between spawns from same grave
-        for lane in range(LANES):
-            # Random grave position in first half of screen for each lane
-            self.grave_positions[lane] = random.randint(-80, SCREEN_WIDTH // 2 - 200)
+        self.graves = []  # List of graves: each is a dict with x, y, lane, last_spawn
+        self.grave_images = import_folder('assets', 'images', 'Grave')
+        self.grave_spawn_delay = 200  # ms
+        self.grave_count = 6
+        self.max_graves = 18
+        self.last_grave_add_time = self.game_start_time
+        self.init_graves()
+
+    def init_graves(self):
+        self.graves = []
+        used_positions = set()
+        for i in range(self.grave_count):
+            while True:
+                lane = random.randint(0, LANES - 1)
+                x = random.randint(int(SCREEN_WIDTH * 0.7), SCREEN_WIDTH - 80)
+                pos = (lane, x)
+                if pos not in used_positions:
+                    used_positions.add(pos)
+                    break
+            y = 150 + lane * LANE_HEIGHT + 25
+            self.graves.append({'lane': lane, 'x': x, 'y': y, 'last_spawn': 0, 'img_idx': i % len(self.grave_images)})
+
+    def add_graves(self, n=2):
+        min_distance = 80  # Khoảng cách tối thiểu giữa các mộ cùng lane
+        used_positions = set((g['lane'], g['x']) for g in self.graves)
+        added = 0
+        tries = 0
+        while added < n and len(self.graves) < self.max_graves and tries < 200:
+            lane = random.randint(0, LANES - 1)
+            x = random.randint(int(SCREEN_WIDTH * 0.7), SCREEN_WIDTH - 80)
+            # Kiểm tra khoảng cách với các mộ cũ cùng lane
+            too_close = False
+            for g in self.graves:
+                if g['lane'] == lane and abs(g['x'] - x) < min_distance:
+                    too_close = True
+                    break
+            if not too_close:
+                y = 150 + lane * LANE_HEIGHT + 25
+                self.graves.append({'lane': lane, 'x': x, 'y': y, 'last_spawn': 0, 'img_idx': len(self.graves) % len(self.grave_images)})
+                used_positions.add((lane, x))
+                added += 1
+            tries += 1
 
     def spawn_zombie(self):
         current_time = pygame.time.get_ticks()
         game_duration = current_time - self.game_start_time
-        
-        if game_duration < DIFFICULTY_INCREASE_INTERVAL:  # 0-30s
-            spawn_interval = 3000  
-        elif game_duration < 2*DIFFICULTY_INCREASE_INTERVAL:  # 30-60s
+        # Thêm mộ mới mỗi 30s
+        if (current_time - self.last_grave_add_time) >= 30000:
+            self.add_graves(2)
+            self.last_grave_add_time = current_time
+        # Tính toán spawn_interval như cũ
+        if game_duration < DIFFICULTY_INCREASE_INTERVAL:
+            spawn_interval = 3000
+        elif game_duration < 2*DIFFICULTY_INCREASE_INTERVAL:
             spawn_interval = 2000
-        elif game_duration < 3*DIFFICULTY_INCREASE_INTERVAL:  # 60-90s
+        elif game_duration < 3*DIFFICULTY_INCREASE_INTERVAL:
             spawn_interval = 1000
-        elif game_duration < 4*DIFFICULTY_INCREASE_INTERVAL:  # 90-120s
+        elif game_duration < 4*DIFFICULTY_INCREASE_INTERVAL:
             spawn_interval = 750
-        else:  # 120s+
+        else:
             spawn_interval = 500
-        
-        if current_time - self.last_zombie_spawn >= spawn_interval:
-            lane = random.randint(0, LANES - 1)
-            grave_key = f"grave_{lane}"
-            
-            # TODO: change things there i just want
-            # when a game start there is random 6 or 5 graves
-            # then zombie will randomly spawn from those
-            if grave_key not in self.last_spawn_per_grave or \
-                current_time - self.last_spawn_per_grave[grave_key] >= self.spawn_delay:
-                # Zombie xuất hiện ngẫu nhiên ở nửa phải màn hình (70%-100%)
-                spawn_x = random.randint(int(SCREEN_WIDTH * 0.7), SCREEN_WIDTH + 200)
+        if current_time - self.last_zombie_spawn >= spawn_interval and self.graves:
+            grave = random.choice(self.graves)
+            if current_time - grave['last_spawn'] >= self.grave_spawn_delay:
+                lane = grave['lane']
+                spawn_x = grave['x']
                 zombie = Zombie(lane, spawn_x, self.zombie_frames)
-                # play sounds
                 audio.play_zombie_appear()
-                
                 self.zombies.append(zombie)
                 self.last_zombie_spawn = current_time
-                self.last_spawn_per_grave[grave_key] = current_time
-    
+                grave['last_spawn'] = current_time
+
     def handle_click(self, pos):
         hit_zombie = False
         for zombie in self.zombies[:]:
@@ -274,6 +305,11 @@ class Game:
     
     def draw_game_background(self):
         self.screen.blit(self.background_surf, (0, 0))
+        # Draw graves
+        for grave in self.graves:
+            img = self.grave_images[grave['img_idx']]
+            rect = img.get_rect(center=(grave['x'], grave['y'] + 30))
+            self.screen.blit(img, rect)
     
     def draw_game_ui(self):
         # UI Background
@@ -395,20 +431,53 @@ class Game:
             self.score_manager.save_score(final_score, stats_dict)
             self.score_saved = True
 
+    def draw_pause_menu(self):
+        # Semi-transparent overlay
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        overlay.set_alpha(180)
+        overlay.fill((0, 0, 0))
+        self.screen.blit(overlay, (0, 0))
+
+        # Pause text
+        pause_text = "PAUSED"
+        shadow = self.font_large.render(pause_text, True, BLACK)
+        main_text = self.font_large.render(pause_text, True, GOLD)
+        text_rect = main_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 120))
+        shadow_rect = shadow.get_rect(center=(SCREEN_WIDTH // 2 + 3, SCREEN_HEIGHT // 2 - 117))
+        self.screen.blit(shadow, shadow_rect)
+        self.screen.blit(main_text, text_rect)
+
+        # Buttons
+        button_w, button_h = 220, 60
+        gap = 30
+        center_x = SCREEN_WIDTH // 2
+        center_y = SCREEN_HEIGHT // 2
+        resume_rect = pygame.Rect(center_x - button_w//2, center_y - button_h - gap//2, button_w, button_h)
+        menu_rect = pygame.Rect(center_x - button_w//2, center_y + gap//2, button_w, button_h)
+
+        pygame.draw.rect(self.screen, (60, 180, 60), resume_rect, border_radius=12)
+        pygame.draw.rect(self.screen, (180, 60, 60), menu_rect, border_radius=12)
+        pygame.draw.rect(self.screen, WHITE, resume_rect, 3, border_radius=12)
+        pygame.draw.rect(self.screen, WHITE, menu_rect, 3, border_radius=12)
+
+        resume_text = self.font_medium.render("Resume", True, WHITE)
+        menu_text = self.font_medium.render("Main Menu", True, WHITE)
+        self.screen.blit(resume_text, resume_text.get_rect(center=resume_rect.center))
+        self.screen.blit(menu_text, menu_text.get_rect(center=menu_rect.center))
+
+        return {'resume': resume_rect, 'menu': menu_rect}
+
     def run(self):
         change_music_0 = False
         change_music_1 = False
         running = True
-
         groan_count = 0
-
+        pause_buttons = None
         while running:
             dt = self.clock.tick(FPS) / 1000
-
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
-                
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:  # Left click
                         if self.state == "menu":
@@ -438,19 +507,25 @@ class Game:
                         
                         elif self.state == "playing":
                             self.handle_click(event.pos)
-                
+                        elif self.state == "paused":
+                            if pause_buttons:
+                                if pause_buttons['resume'].collidepoint(event.pos):
+                                    self.state = "playing"
+                                elif pause_buttons['menu'].collidepoint(event.pos):
+                                    audio.stop_grasswalk()
+                                    audio.stop_looboon()
+                                    audio.stop_brain_maniac()
+                                    audio.play_background()
+                                    self.state = "menu"
+                                    self.menu.state = "main"
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         if self.state == "menu":
                             running = False
-                        else:
-                            audio.stop_grasswalk()
-                            audio.stop_looboon()
-                            audio.stop_brain_maniac()
-                            audio.play_background()
-
-                            self.state = "menu"
-                            self.menu.state = "main"
+                        elif self.state == "playing":
+                            self.state = "paused"
+                        elif self.state == "paused":
+                            self.state = "playing"
                     
                     elif event.key == pygame.K_r:
                         if self.state == "game_over":
@@ -531,6 +606,17 @@ class Game:
                 self.score_bar.draw(self.screen, self.score, self.health, self.hits, self.misses, self.combo, game_duration)
                 self.draw_cartoon_popups()
                 self.draw_game_ui()
+            
+            elif self.state == "paused":
+                self.draw_game_background()
+                for zombie in self.zombies:
+                    zombie.draw(self.screen)
+                self.draw_hit_effects()
+                self.draw_effects()
+                self.score_bar.draw(self.screen, self.score, self.health, self.hits, self.misses, self.combo, (pygame.time.get_ticks() - self.game_start_time)/1000)
+                self.draw_cartoon_popups()
+                self.draw_game_ui()
+                pause_buttons = self.draw_pause_menu()
             
             elif self.state == "game_over":
                 self.draw_game_background()
