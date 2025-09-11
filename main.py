@@ -210,6 +210,12 @@ class Game:
         if not hit_zombie:
             self.misses += 1
             self.combo = 0
+            # Hiệu ứng miss popup
+            popup = CartoonPopupText(
+                pos[0], pos[1] - 40,
+                "Miss!", RED
+            )
+            self.cartoon_popups.append(popup)
 
     def create_boom(self, zombie):
         boom = Boom(self.boom_surf, self.create_explosion, zombie)
@@ -267,14 +273,13 @@ class Game:
     def update_zombies(self):
         current_time = pygame.time.get_ticks()
         game_duration = current_time - self.game_start_time
-        
         for zombie in self.zombies[:]:
             zombie.update(game_duration)
-            
             # Thua khi zombie đi được 80% màn hình (không cần tới sát mép)
             if zombie.rect.right < int(SCREEN_WIDTH * 0.2) and not zombie.hit:
                 audio.play_eat_sound()
                 self.health -= 1
+                self.misses += 1  # Tính là miss khi zombie vào nhà
                 self.zombies.remove(zombie)
                 self.combo = 0
             elif zombie.hit and zombie.hit_effect_time <= 0:
@@ -371,41 +376,32 @@ class Game:
             popup.draw(self.screen, self.font_medium, self.font_small)
     
     def draw_game_over(self):
-
         audio.stop_grasswalk()
         audio.stop_looboon()
         audio.stop_brain_maniac()
-
         # Semi-transparent overlay
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         overlay.set_alpha(180)
         overlay.fill(BLACK)
         self.screen.blit(overlay, (0, 0))
-        
         # Game Over text with glow
         game_over_text = "GAME OVER"
         shadow = self.font_large.render(game_over_text, True, BLACK)
         main_text = self.font_large.render(game_over_text, True, RED)
-        
         text_rect = main_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 150))
         shadow_rect = shadow.get_rect(center=(SCREEN_WIDTH // 2 + 3, SCREEN_HEIGHT // 2 - 147))
-        
         self.screen.blit(shadow, shadow_rect)
         self.screen.blit(main_text, text_rect)
-        
         # Final score
         final_score = self.calculate_final_score()
         score_text = f"Final Score: {final_score}"
         score_surface = self.font_medium.render(score_text, True, GOLD)
         score_rect = score_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 80))
         self.screen.blit(score_surface, score_rect)
-        
         # Detailed stats
         total_shots = self.hits + self.misses
         accuracy = (self.hits / total_shots * 100) if total_shots > 0 else 0
-        
         game_duration = (self.game_end_time - self.game_start_time) / 1000 if self.game_end_time else 0
-        
         stats = [
             f"Zombies Defeated: {self.hits}",
             f"Shots Missed: {self.misses}",
@@ -413,12 +409,10 @@ class Game:
             f"Max Combo: {self.max_combo}",
             f"Time Survived: {game_duration:.1f}s"
         ]
-        
         for i, stat in enumerate(stats):
             stat_surface = self.font_small.render(stat, True, WHITE)
             stat_rect = stat_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20 + i * 25))
             self.screen.blit(stat_surface, stat_rect)
-        
         # Save score (only once)
         if not hasattr(self, 'score_saved'):
             stats_dict = {
@@ -430,6 +424,23 @@ class Game:
             }
             self.score_manager.save_score(final_score, stats_dict)
             self.score_saved = True
+        # Draw Retry and Main Menu buttons (đặt thấp xuống)
+        button_w, button_h = 220, 60
+        gap = 30
+        center_x = SCREEN_WIDTH // 2
+        # Đặt nút cách đáy màn hình 60px
+        bottom_margin = 60
+        menu_rect = pygame.Rect(center_x - button_w//2, SCREEN_HEIGHT - bottom_margin - button_h, button_w, button_h)
+        retry_rect = pygame.Rect(center_x - button_w//2, menu_rect.top - gap - button_h, button_w, button_h)
+        pygame.draw.rect(self.screen, (60, 180, 60), retry_rect, border_radius=12)
+        pygame.draw.rect(self.screen, (180, 60, 60), menu_rect, border_radius=12)
+        pygame.draw.rect(self.screen, WHITE, retry_rect, 3, border_radius=12)
+        pygame.draw.rect(self.screen, WHITE, menu_rect, 3, border_radius=12)
+        retry_text = self.font_medium.render("Retry", True, WHITE)
+        menu_text = self.font_medium.render("Main Menu", True, WHITE)
+        self.screen.blit(retry_text, retry_text.get_rect(center=retry_rect.center))
+        self.screen.blit(menu_text, menu_text.get_rect(center=menu_rect.center))
+        return {'retry': retry_rect, 'menu': menu_rect}
 
     def draw_pause_menu(self):
         # Semi-transparent overlay
@@ -473,6 +484,7 @@ class Game:
         running = True
         groan_count = 0
         pause_buttons = None
+        gameover_buttons = None
         while running:
             dt = self.clock.tick(FPS) / 1000
             for event in pygame.event.get():
@@ -512,6 +524,23 @@ class Game:
                                 if pause_buttons['resume'].collidepoint(event.pos):
                                     self.state = "playing"
                                 elif pause_buttons['menu'].collidepoint(event.pos):
+                                    audio.stop_grasswalk()
+                                    audio.stop_looboon()
+                                    audio.stop_brain_maniac()
+                                    audio.play_background()
+                                    self.state = "menu"
+                                    self.menu.state = "main"
+                        elif self.state == "game_over":
+                            if gameover_buttons:
+                                if gameover_buttons['retry'].collidepoint(event.pos):
+                                    audio.stop_grasswalk()
+                                    audio.stop_looboon()
+                                    audio.stop_brain_maniac()
+                                    audio.play_grasswalk()
+                                    self.state = "playing"
+                                    self.reset_game()
+                                    self.score_saved = False
+                                elif gameover_buttons['menu'].collidepoint(event.pos):
                                     audio.stop_grasswalk()
                                     audio.stop_looboon()
                                     audio.stop_brain_maniac()
@@ -627,6 +656,7 @@ class Game:
                 
                 # sounds
                 self.draw_game_over()
+                gameover_buttons = self.draw_game_over()
 
             pygame.display.flip()
             self.clock.tick(FPS)
